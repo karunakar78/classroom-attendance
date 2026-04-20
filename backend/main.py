@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database.connection import engine, SessionLocal
 from database import models
 from recognition.enrollment import load_all_embeddings_to_faiss
+from api import auth, students, sessions, attendance
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,6 +23,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(auth.router)
+app.include_router(students.router)
+app.include_router(sessions.router)
+app.include_router(attendance.router)
 
 @app.on_event("startup")
 def startup_event():
