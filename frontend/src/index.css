@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-base:       #03080f;
+    --bg-card:       rgba(255, 255, 255, 0.03);
+    --border-subtle: rgba(6, 182, 212, 0.15);
+    --border-dim:    rgba(255, 255, 255, 0.08);
+    --accent-cyan:   #06b6d4;
+    --accent-teal:   #14b8a6;
+    --accent-green:  #10b981;
+    --text-primary:  #e2f4f8;
+    --text-muted:    rgba(226, 244, 248, 0.4);
+    --text-faint:    rgba(226, 244, 248, 0.2);
+    --glow-cyan:     0 0 18px rgba(6, 182, 212, 0.35);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body, #root { height: 100%; width: 100%; }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', 'Courier New', monospace;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+  }
+
+  .custom-scroll::-webkit-scrollbar        { width: 4px; }
+  .custom-scroll::-webkit-scrollbar-track  { background: transparent; }
+  .custom-scroll::-webkit-scrollbar-thumb  { background: rgba(6,182,212,0.25); border-radius: 2px; }
+  .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(6,182,212,0.5); }
+
+  .scan-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 3px,
+      rgba(0,0,0,0.07) 3px, rgba(0,0,0,0.07) 4px
+    );
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  .scan-beam {
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(6,182,212,0.5) 30%,
+      rgba(6,182,212,0.9) 50%,
+      rgba(6,182,212,0.5) 70%,
+      transparent
+    );
+    box-shadow: 0 0 12px 4px rgba(6,182,212,0.25);
+    animation: scanline 3s linear infinite;
+    pointer-events: none;
+  }
+
+  .corner-bracket { position: absolute; width: 20px; height: 20px; border-color: var(--accent-cyan); border-style: solid; opacity: 0.6; }
+  .corner-tl { top: 10px; left: 10px;    border-width: 2px 0 0 2px; border-radius: 2px 0 0 0; }
+  .corner-tr { top: 10px; right: 10px;   border-width: 2px 2px 0 0; border-radius: 0 2px 0 0; }
+  .corner-bl { bottom: 10px; left: 10px;  border-width: 0 0 2px 2px; border-radius: 0 0 0 2px; }
+  .corner-br { bottom: 10px; right: 10px; border-width: 0 2px 2px 0; border-radius: 0 0 2px 0; }
+
+  .attendance-row {
+    opacity: 0;
+    animation: fadeSlideUp 0.4s ease forwards;
+  }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes scanline {
+  0%   { top: 0%; }
+  100% { top: 100%; }
+}
+@keyframes pulse2 {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.15; }
+}
