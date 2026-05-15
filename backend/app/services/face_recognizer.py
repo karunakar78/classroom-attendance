@@ -1,150 +1,51 @@
-import torch
-import cv2
-import base64
 import numpy as np
-
-from io import BytesIO
-from PIL import Image
-
-from facenet_pytorch import (
-    InceptionResnetV1,
-    MTCNN
-)
+from insightface.app import FaceAnalysis
 
 from app.services.embeddings_store import (
     KNOWN_EMBEDDINGS,
     KNOWN_NAMES
 )
 
-# Device configuration
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Initialize MTCNN
-mtcnn = MTCNN(
-    keep_all=True,
-    device=device
+_app = FaceAnalysis(
+    name='buffalo_l',
+    allowed_modules=['detection', 'recognition'],
+    providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
 )
+_app.prepare(ctx_id=0, det_size=(640, 640))
 
-# Initialize FaceNet model
-resnet = InceptionResnetV1(
-    pretrained="vggface2"
-).eval().to(device)
-
-
-def image_to_base64(frame):
-    _, buffer = cv2.imencode(".jpg", frame)
-
-    base64_image = base64.b64encode(
-        buffer
-    ).decode("utf-8")
-
-    return f"data:image/jpeg;base64,{base64_image}"
+THRESHOLD = 0.7
 
 
 def recognize_faces(frame):
 
-    # Convert BGR to RGB
-    rgb_frame = cv2.cvtColor(
-        frame,
-        cv2.COLOR_BGR2RGB
-    )
-
-    pil_image = Image.fromarray(rgb_frame)
-
-    # Detect faces
-    boxes, probs = mtcnn.detect(pil_image)
+    faces = _app.get(frame)
 
     results = []
 
-    if boxes is None:
-        return {
-            "faces": [],
-            "annotated_frame": image_to_base64(frame)
-        }
+    for face in faces:
 
-    # Extract aligned faces
-    faces = mtcnn.extract(
-        pil_image,
-        boxes,
-        save_path=None
-    )
+        x1, y1, x2, y2 = map(int, face.bbox)
 
-    for face_tensor, box in zip(faces, boxes):
+        embedding = face.embedding  # L2-normalised, shape [512]
 
-        if face_tensor is None:
-            continue
-
-        x1, y1, x2, y2 = map(int, box)
-
-        # Generate embedding
-        face_tensor = face_tensor.unsqueeze(0).to(device)
-
-        embedding = resnet(
-            face_tensor
-        ).detach().cpu()
-
-        # Compare with known embeddings
-        min_dist = float("inf")
+        best_sim = -1.0
         identity = "Unknown"
 
-        for known_embedding, name in zip(
-            KNOWN_EMBEDDINGS,
-            KNOWN_NAMES
-        ):
+        for known_emb, name in zip(KNOWN_EMBEDDINGS, KNOWN_NAMES):
 
-            dist = torch.dist(
-                embedding,
-                known_embedding
-            ).item()
+            sim = float(np.dot(embedding, known_emb))
 
-            if dist < min_dist:
-                min_dist = dist
+            if sim > best_sim:
+                best_sim = sim
                 identity = name
 
-        # Confidence calculation
-        confidence = max(0, 1 - min_dist)
-
-        # Recognition threshold
-        THRESHOLD = 0.9
-
-        if min_dist > THRESHOLD:
+        if best_sim < THRESHOLD:
             identity = "Unknown"
 
-        # Store results
         results.append({
             "name": identity,
-            "confidence": round(confidence, 3),
+            "confidence": round(max(0.0, best_sim), 3),
             "box": [x1, y1, x2, y2]
         })
 
-        # Draw bounding box
-        color = (0, 255, 0)
-
-        if identity == "Unknown":
-            color = (0, 0, 255)
-
-        cv2.rectangle(
-            frame,
-            (x1, y1),
-            (x2, y2),
-            color,
-            2
-        )
-
-        # Draw label
-        label = f"{identity} ({round(confidence * 100)}%)"
-
-        cv2.putText(
-            frame,
-            label,
-            (x1, y1 - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2
-        )
-
-    return {
-        "faces": results,
-        "annotated_frame": image_to_base64(frame)
-    }
+    return {"faces": results}
