@@ -32,3 +32,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Known faces
+known_faces/backend/app/known_faces/
