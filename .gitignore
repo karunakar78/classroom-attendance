@@ -34,4 +34,4 @@ Thumbs.db
 .idea/
 
 # Known faces
-known_faces/backend/app/known_faces/
+backend/app/known_faces/
