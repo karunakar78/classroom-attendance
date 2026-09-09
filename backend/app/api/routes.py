@@ -7,10 +7,10 @@ from sqlalchemy import and_, extract, func, or_
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.db.models import Attendance, Class, ClassSession, Student
+from app.db.models import Attendance, Camera, Class, ClassSession, Student
 from app.services.face_recognizer import recognize_faces
 from app.utils.image_utils import base64_to_image
-
+import time
 router = APIRouter()
 
 
@@ -20,7 +20,8 @@ class FrameRequest(BaseModel):
     image: str
 
 class StartSessionRequest(BaseModel):
-    class_id: int
+    semester:  int
+    camera_id: Optional[int] = None
 
 class MarkAttendanceRequest(BaseModel):
     session_id: int
@@ -34,9 +35,10 @@ async def process_frame(request: FrameRequest, db: Session = Depends(get_db)):
     frame = base64_to_image(request.image)
     if frame is None:
         raise HTTPException(status_code=400, detail="Invalid image data")
-
+    start_time = time.time()
     result = recognize_faces(frame)
-
+    end_time = time.time()
+    print(f"Face recognition took {end_time - start_time:.3f} seconds")
     # Map folder/USN names → student full names for display
     for face in result.get("faces", []):
         if face["name"] != "Unknown":
@@ -221,6 +223,24 @@ def get_classes(db: Session = Depends(get_db)):
     ]
 
 
+# ── Cameras ────────────────────────────────────────────────────────────────────
+
+@router.get("/cameras")
+def get_cameras(db: Session = Depends(get_db)):
+    cameras = db.query(Camera).order_by(Camera.id).all()
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "location": c.location,
+            "camera_index": c.camera_index,
+            "stream_url": c.stream_url,
+            "is_active": c.is_active,
+        }
+        for c in cameras
+    ]
+
+
 # ── Sessions ───────────────────────────────────────────────────────────────────
 
 @router.get("/sessions/current")
@@ -239,17 +259,15 @@ def get_current_session(db: Session = Depends(get_db)):
 
 @router.post("/sessions/start")
 def start_session(request: StartSessionRequest, db: Session = Depends(get_db)):
-    cls = db.query(Class).filter(Class.id == request.class_id).first()
-    if not cls:
-        raise HTTPException(status_code=404, detail="Class not found")
-
     # Deactivate any current active session
     db.query(ClassSession).filter(ClassSession.is_active == True).update(
         {"is_active": False, "end_time": datetime.now()}
     )
 
     session = ClassSession(
-        class_id=cls.id,
+        class_id=None,
+        camera_id=request.camera_id,
+        semester=request.semester,
         date=date.today(),
         start_time=datetime.now(),
         is_active=True,
@@ -282,11 +300,15 @@ def _session_payload(session: ClassSession, db: Session) -> dict:
     return {
         "id": session.id,
         "class_id": session.class_id,
-        "class_code": session.cls.code,
-        "class_name": session.cls.name,
-        "section": session.cls.section,
-        "strength": session.cls.strength,
-        "faculty": session.cls.faculty,
+        "class_code": session.cls.code if session.cls else None,
+        "class_name": session.cls.name if session.cls else None,
+        "section": session.cls.section if session.cls else None,
+        "strength": session.cls.strength if session.cls else 0,
+        "faculty": session.cls.faculty if session.cls else None,
+        "semester": session.semester,
+        "camera_id": session.camera_id,
+        "camera_name": session.camera.name if session.camera else None,
+        "camera_location": session.camera.location if session.camera else None,
         "start_time": session.start_time.isoformat(),
         "present_count": len(records),
         "attendance": [
@@ -323,6 +345,9 @@ def mark_attendance(request: MarkAttendanceRequest, db: Session = Depends(get_db
     ).first()
     if not student:
         return {"success": False, "reason": "Student not in database"}
+
+    if session.semester and student.semester != session.semester:
+        return {"success": False, "reason": f"Student is semester {student.semester}, session is semester {session.semester}"}
 
     existing = (
         db.query(Attendance)

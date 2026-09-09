@@ -107,6 +107,7 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
   const [faceCount, setFaceCount] = useState(0)
   const [camReady, setCamReady]   = useState(false)
   const [error, setError]         = useState(null)
+  const [camDims, setCamDims]     = useState({ w: 0, h: 0 })
 
   const webcamRef        = useRef(null)
   const sendingRef       = useRef(false)
@@ -278,7 +279,9 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
           {camLabel}
         </span>
         <span className="text-[10px] font-mono tracking-[0.1em]" style={{ color: 'var(--text-faint)' }}>
-          {error ? <span style={{ color: '#f87171' }}>ERR: {error}</span> : '320×240 · AI STREAM'}
+          {error
+            ? <span style={{ color: '#f87171' }}>ERR: {error}</span>
+            : `${camDims.w || '—'}×${camDims.h || '—'} · AI STREAM`}
         </span>
       </div>
 
@@ -297,9 +300,15 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
           audio={false}
           mirrored={true}
           screenshotFormat="image/jpeg"
-          screenshotQuality={0.4}
-          videoConstraints={{ width: 320, height: 240, facingMode: 'user' }}
-          onUserMedia={() => setCamReady(true)}
+          screenshotQuality={0.9}
+          videoConstraints={{ width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'user' }}
+          onUserMedia={(stream) => {
+            setCamReady(true)
+            const settings = stream.getVideoTracks()[0]?.getSettings?.()
+            if (settings?.width && settings?.height) {
+              setCamDims({ w: settings.width, h: settings.height })
+            }
+          }}
           onUserMediaError={(e) => setError(e.message ?? 'Camera denied')}
           className="absolute inset-0 w-full h-full object-cover z-0"
         />
