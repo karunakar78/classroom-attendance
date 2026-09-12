@@ -1,14 +1,19 @@
+import os
 import time
+
 import obsws_python as obs
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 # ==============================
 # CONFIGURATION
 # ==============================
 
-OBS_HOST = "10.120.70.38"
-OBS_PORT = 4455
-OBS_PASSWORD = "9ZAomL6YKDNDyyYr"
+OBS_HOST = os.environ["OBS_HOST"]
+OBS_PORT = int(os.environ.get("OBS_PORT", 4455))
+OBS_PASSWORD = os.environ["OBS_PASSWORD"]
 
 SCENES = [
     "Scene 2",

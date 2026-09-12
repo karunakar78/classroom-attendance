@@ -3,7 +3,12 @@ import Webcam from 'react-webcam'
 import { api } from '../api'
 
 const BACKEND        = 'http://localhost:8000'
-const FRAME_INTERVAL = 300   // ms between frames sent to backend
+const FRAME_INTERVAL = 300   // normal ms between frames sent to backend
+// A real blink is brief (~100-200ms). Sampling only every FRAME_INTERVAL
+// can miss it for several seconds, so once the backend reports a face is
+// still awaiting liveness confirmation, we sample faster — invisible to
+// the user, no prompt, just a tighter poll — until it resolves.
+const LIVENESS_INTERVAL = 100 // ms between frames while liveness is pending
 const DWELL_MS       = 2000  // face must stay recognised this long before marking
 const RESET_GAP_MS   = 1500  // face absent longer than this → timer resets
 
@@ -112,6 +117,7 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
   const webcamRef        = useRef(null)
   const sendingRef       = useRef(false)
   const lastSentRef      = useRef(0)
+  const captureIntervalRef = useRef(FRAME_INTERVAL)
   const sessionRef       = useRef(session)
   const onMarkedRef      = useRef(onAttendanceMarked)
   const faceTimersRef    = useRef({})   // { name: { startTime, lastSeenTime } }
@@ -144,7 +150,7 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
     if (sendingRef.current) return
 
     const now = Date.now()
-    if (now - lastSentRef.current < FRAME_INTERVAL) return
+    if (now - lastSentRef.current < captureIntervalRef.current) return
     lastSentRef.current = now
 
     const screenshot = webcamRef.current.getScreenshot()
@@ -162,6 +168,12 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
 
       const allFaces        = data.faces || []
       const recognizedFaces = allFaces.filter(f => f.name !== 'Unknown')
+
+      // Sample faster while any face is still proving it's live, so a
+      // brief blink is less likely to fall between frames; back off to
+      // the normal rate once nobody's pending.
+      const awaitingLiveness = allFaces.some(f => f.liveness === 'awaiting_blink')
+      captureIntervalRef.current = awaitingLiveness ? LIVENESS_INTERVAL : FRAME_INTERVAL
       const visibleNames    = new Set(recognizedFaces.map(f => f.name))
 
       // Update dwell timers for visible faces
@@ -239,10 +251,13 @@ export default function LiveFeed({ session, onAttendanceMarked }) {
     }
   }
 
-  // Single stable interval
+  // Driver tick always runs at the fastest possible rate; the actual send
+  // rate is throttled inside captureAndSend via captureIntervalRef, which
+  // adapts between FRAME_INTERVAL and LIVENESS_INTERVAL based on the last
+  // response.
   useEffect(() => {
     if (!camReady) return
-    const id = setInterval(() => captureAndSendRef.current?.(), FRAME_INTERVAL)
+    const id = setInterval(() => captureAndSendRef.current?.(), LIVENESS_INTERVAL)
     return () => clearInterval(id)
   }, [camReady])
 

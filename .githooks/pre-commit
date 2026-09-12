@@ -1,0 +1,38 @@
+#!/bin/sh
+# Blocks commits that add secrets or known-sensitive files/paths.
+# Enable with: git config core.hooksPath .githooks
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+blocked_paths='(^|/)\.env($|\.[^.]+$)|(^|/)known_faces/|(^|/)face/|\.pkl$|\.pem$|\.key$|(^|/)credentials\.json$'
+fail=0
+
+for f in $staged; do
+    if echo "$f" | grep -qE "$blocked_paths"; then
+        if [ "$f" != "backend/.env.example" ]; then
+            echo "pre-commit: refusing to commit sensitive path: $f"
+            fail=1
+        fi
+    fi
+done
+
+secret_pattern='(password|passwd|secret|api[_-]?key|access[_-]?key|token)\s*[:=]\s*["'"'"']?[A-Za-z0-9+/_\-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+for f in $staged; do
+    case "$f" in
+        *.lock|*.svg|*.png|*.jpg|*.jpeg|*.ico|package-lock.json) continue ;;
+    esac
+    if git diff --cached -- "$f" | grep -E '^\+' | grep -v '^+++' | grep -Ei "$secret_pattern" >/dev/null; then
+        echo "pre-commit: possible hardcoded secret in: $f"
+        fail=1
+    fi
+done
+
+if [ "$fail" = "1" ]; then
+    echo ""
+    echo "Commit blocked. Move secrets to backend/.env (gitignored) and sensitive data out of the repo, or use 'git commit --no-verify' if this is a false positive."
+    exit 1
+fi
+
+exit 0

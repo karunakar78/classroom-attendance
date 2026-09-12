@@ -1,11 +1,4 @@
-venv/
-__pycache__/
-*.pyc
-.env
-*.db
-models/
-myref.txt
-
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -18,12 +11,37 @@ build/
 .eggs/
 venv/
 env/
+face/
 .venv/
 
-# Env files
+# Env files / secrets
 .env
-.env.local
-*.env
+.env.*
+.env.example
+*.pem
+*.key
+credentials.json
+myref.txt
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Face recognition data (biometric / personal data — never commit)
+backend/app/known_faces/
+backend/embeddings.pkl
+backend/app/services/liveliness/__pycache__/
+*.pkl
+face/
+
+# Model weights (large binaries, re-downloadable)
+models/
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
 
 # OS
 .DS_Store
@@ -32,6 +50,3 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
-
-# Known faces
-backend/app/known_faces/

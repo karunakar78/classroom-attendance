@@ -1,8 +1,10 @@
+import os
 import time
 
 import numpy as np
 import supervision as sv
 from collections import deque
+from dotenv import load_dotenv
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from app.services.preprocessing import enhance_frame
@@ -10,6 +12,16 @@ from app.services.embeddings_store import (
     KNOWN_EMBEDDINGS,
     KNOWN_NAMES,
 )
+from app.services.liveness.blink import BlinkTracker, eye_openness
+from app.services.liveness.motion import MotionTracker
+from app.services.liveness.gaze import GazeTracker, eye_gaze_positions
+
+load_dotenv()
+
+# Toggle for A/B testing with and without the liveness gate — set
+# LIVENESS_ENABLED=false in .env to recognize faces immediately, with no
+# blink/motion check, exactly like before this feature existed.
+LIVENESS_ENABLED = os.getenv("LIVENESS_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # ------------------------------------------------------------------ #
 #  InsightFace + ByteTrack setup                                       #
@@ -17,7 +29,7 @@ from app.services.embeddings_store import (
 
 _app = FaceAnalysis(
     name="buffalo_l",
-    allowed_modules=["detection", "recognition"],
+    allowed_modules=["detection", "recognition", "landmark_2d_106"],
     providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
 )
 _app.prepare(ctx_id=0, det_size=(1280, 1280), det_thresh=0.4)
@@ -26,8 +38,9 @@ _app.prepare(ctx_id=0, det_size=(1280, 1280), det_thresh=0.4)
 # every detected face, even ones whose track is already locked in. We
 # call detection and recognition separately so recognition only runs
 # for tracks that still need it (see recognize_faces below).
-_det_model = _app.det_model
-_rec_model = _app.models["recognition"]
+_det_model      = _app.det_model
+_rec_model      = _app.models["recognition"]
+_landmark_model = _app.models["landmark_2d_106"]
 
 _tracker = sv.ByteTrack(
     track_activation_threshold=0.25,
@@ -57,6 +70,15 @@ _track_identities: dict[int, tuple[str, float]] = {}
 
 # track_id → rolling deque of L2-normalised embeddings
 _track_emb_buffer: dict[int, deque]             = {}
+
+# track_id → BlinkTracker  — liveness signal, latches on a real blink
+_track_blink: dict[int, BlinkTracker]           = {}
+
+# track_id → MotionTracker — fallback, latches on whole-head sway
+_track_motion: dict[int, MotionTracker]         = {}
+
+# track_id → GazeTracker   — fallback, latches on pupil movement within the eye
+_track_gaze: dict[int, GazeTracker]             = {}
 
 # ------------------------------------------------------------------ #
 #  Helpers                                                             #
@@ -98,7 +120,7 @@ def _best_match(embedding: np.ndarray) -> tuple[str, float]:
 
 def _cleanup_stale(active_ids: set[int]) -> None:
     """Drop all per-track state for tracks that have disappeared."""
-    for store in (_track_identities, _track_emb_buffer):
+    for store in (_track_identities, _track_emb_buffer, _track_blink, _track_motion, _track_gaze):
         for tid in [k for k in store if k not in active_ids]:
             del store[tid]
 
@@ -121,6 +143,7 @@ def _iou(box_a, box_b) -> float:
 def recognize_faces(frame: np.ndarray) -> dict:
     total_time = time.perf_counter()
     recognition_time = 0.0
+    liveness_time = 0.0
 
     t = time.perf_counter()
     frame = enhance_frame(frame)
@@ -182,10 +205,73 @@ def recognize_faces(frame: np.ndarray) -> dict:
                 "name":       identity,
                 "confidence": round(score, 3),
                 "box":        [x1, y1, x2, y2],
+                "live":       True,
             }))
             continue
 
-        # ── Not yet confirmed — only now do we pay for recognition ── #
+        # ── Liveness gate — identity is only attempted once this track ──
+        # clears at least one of three signals: a blink, the pupil moving
+        # within its own eye socket, or sustained whole-head sway. Blink
+        # and gaze are both "relative" measurements a rigid photo can't
+        # fake by itself (a printed eye never opens, and its printed pupil
+        # never moves relative to its own printed eye corners, no matter
+        # how the page is handled) — but at classroom/CCTV distance, the
+        # eye region may simply be too few pixels for either to resolve at
+        # all. Motion is added to still recognize distant faces in that
+        # case, at a known, accepted cost:
+        #
+        # KNOWN VULNERABILITY (reported to the user, not hidden): a photo
+        # or phone held in a human hand wobbles with the same tremor
+        # amplitude as a real head, since the same hand/wrist drives both.
+        # Motion alone cannot tell them apart, so a hand-held (not
+        # tripod-mounted/taped) spoof can pass via this fallback. This
+        # trade favors recognizing every real, distant student over
+        # closing that specific gap. Disable the whole gate via
+        # LIVENESS_ENABLED=false in .env.
+        if LIVENESS_ENABLED:
+            t = time.perf_counter()
+            if tid not in _track_blink:
+                _track_blink[tid] = BlinkTracker()
+            if tid not in _track_gaze:
+                _track_gaze[tid] = GazeTracker()
+            if tid not in _track_motion:
+                _track_motion[tid] = MotionTracker()
+            blink  = _track_blink[tid]
+            gaze   = _track_gaze[tid]
+            motion = _track_motion[tid]
+
+            if not blink.confirmed or not gaze.confirmed:
+                landmarks = _landmark_model.get(frame, best_face)
+                if not blink.confirmed:
+                    blink.update(eye_openness(landmarks))
+                if not gaze.confirmed:
+                    left_pos, right_pos = eye_gaze_positions(frame, landmarks)
+                    gaze.update(left_pos, right_pos)
+            if not motion.confirmed:
+                motion.update((x1, y1, x2, y2))
+
+            is_live = blink.confirmed or gaze.confirmed or motion.confirmed
+            liveness_time += time.perf_counter() - t
+
+            print(
+                f"[Track {tid}] liveness: blink={blink.confirmed} "
+                f"gaze={gaze.confirmed} motion={motion.confirmed}"
+            )
+        else:
+            is_live = True
+
+        if not is_live:
+            results.append(_safe({
+                "track_id":   tid,
+                "name":       "Unknown",
+                "confidence": 0.0,
+                "box":        [x1, y1, x2, y2],
+                "live":       False,
+                "liveness":   "awaiting_blink",
+            }))
+            continue
+
+        # ── Confirmed live — only now do we pay for recognition ──── #
         t = time.perf_counter()
         _rec_model.get(frame, best_face)
         recognition_time += time.perf_counter() - t
@@ -207,6 +293,7 @@ def recognize_faces(frame: np.ndarray) -> dict:
                 "name":       "Pending",
                 "confidence": 0.0,
                 "box":        [x1, y1, x2, y2],
+                "live":       True,
             }))
             continue
 
@@ -228,12 +315,14 @@ def recognize_faces(frame: np.ndarray) -> dict:
             "name":       identity,
             "confidence": round(score, 3) if identity != "Unknown" else 0.0,
             "box":        [x1, y1, x2, y2],
+            "live":       True,
         }))
 
     total_pipeline_time = time.perf_counter() - total_time
     print(
         f"Preprocess: {preprocessing_time:.4f}s | "
         f"InsightFace-detect: {face_detection_time:.4f}s | "
+        f"Liveness: {liveness_time:.4f}s | "
         f"InsightFace-recognize: {recognition_time:.4f}s | "
         f"Detection: {detection_time:.4f}s | "
         f"Tracking: {tracking_time:.4f}s | "
